@@ -1,0 +1,73 @@
+#include "/Engine/Private/Common.ush"
+#include "/Engine/Private/SceneTexturesCommon.ush"
+
+// Параметры, передаваемые из C++
+float Contrast_R;
+float Contrast_G;
+float Contrast_B;
+float Gamma_R;
+float Gamma_G;
+float Gamma_B;
+float Blend_Amount;
+float Bleach_Bypass_Amount;
+float Enable_Bleach_Bypass;
+
+// Регулируемая сигмоида — функция для повышения контрастности
+float AdjustableSigmoidCurve(float value, float amount) 
+{
+    return value < 0.5 ? pow(value, amount) * pow(2.0, amount) * 0.5 
+                       : 1.0 - pow(1.0 - value, amount) * pow(2.0, amount) * 0.5;
+}
+
+// Вершинный шейдер — стандартная отрисовка прямоугольника
+void MainVS(
+    in float4 InPosition : ATTRIBUTE0,
+    in float2 InTexCoord : ATTRIBUTE1,
+    out noperspective float4 OutUVAndScreenPos : TEXCOORD0,
+    out float4 OutPosition : SV_POSITION)
+{
+    DrawRectangle(InPosition, InTexCoord, OutPosition, OutUVAndScreenPos);
+}
+
+// Пиксельный шейдер
+float4 MainPS(noperspective float4 UVAndScreenPos : TEXCOORD0) : SV_Target0
+{
+    float2 uv = UVAndScreenPos.xy;
+
+    // Получаем исходное изображение
+    float3 baseColor = CalcSceneColor(uv);
+    float3 color = baseColor;
+
+    // Применение гаммы
+    color.r = pow(color.r, Gamma_R);
+    color.g = pow(color.g, Gamma_G);
+    color.b = pow(color.b, Gamma_B);
+
+    // Применение контраста
+    color.r = AdjustableSigmoidCurve(color.r, Contrast_R);
+    color.g = AdjustableSigmoidCurve(color.g, Contrast_G);
+    color.b = AdjustableSigmoidCurve(color.b, Contrast_B);
+
+    // Эффект «плёнки» — небольшое смещение каналов
+    color.g = color.g * 0.8 + color.b * 0.2;
+
+    // Эффект bleach bypass (при Enable_Bleach_Bypass > 0.5)
+    if (Enable_Bleach_Bypass > 0.5)
+    {
+        float gray = dot(color.rgb, float3(0.3333, 0.3333, 0.3333));
+        float3 blend = (gray > 0.5) 
+            ? (1.0 - 2.0 * (1.0 - gray) * (1.0 - color)) 
+            : (2.0 * gray * color);
+
+        // Небольшая экспоненциальная коррекция результата
+        blend = pow(blend, 0.6);
+
+        // Смешиваем исходный цвет с bleach по коэффициенту Bleach_Bypass_Amount
+        color = lerp(color, blend, Bleach_Bypass_Amount);
+    }
+
+    // Смешиваем оригинальный цвет и эффект по Blend_Amount
+    float3 finalColor = lerp(baseColor, color, Blend_Amount);
+
+    return float4(finalColor, 1.0); // Альфа-канал = 1.0
+}
